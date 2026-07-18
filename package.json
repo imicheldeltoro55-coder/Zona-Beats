@@ -1,0 +1,14 @@
+{
+  "name": "dj-beats-app",
+  "version": "1.0.0",
+  "description": "Plataforma de streaming para DJ - sin dependencias externas",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {}
+}

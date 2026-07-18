@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Panel del DJ · Zona Beats</title>
+<link rel="stylesheet" href="/admin/admin.css">
+</head>
+<body>
+
+  <!-- Pantalla de login -->
+  <div class="login-screen" id="login-screen">
+    <div class="login-box">
+      <h1>Panel del DJ</h1>
+      <p>Acceso privado para subir contenido.</p>
+      <div class="field">
+        <label for="password-input">Contraseña</label>
+        <input type="password" id="password-input" placeholder="••••••••">
+      </div>
+      <button class="btn-primary" id="login-btn">Entrar</button>
+      <div class="error-msg" id="login-error">Contraseña incorrecta.</div>
+    </div>
+  </div>
+
+  <!-- Dashboard -->
+  <div class="admin-shell" id="admin-shell">
+    <div class="admin-topbar">
+      <div class="admin-brand"><span class="dot"></span> PANEL DEL DJ</div>
+      <button class="btn-logout" id="logout-btn">Cerrar sesión</button>
+    </div>
+
+    <main class="admin-main">
+
+      <div class="panel">
+        <h2>Subir nueva pista</h2>
+        <form id="upload-form">
+          <div class="upload-grid">
+            <div>
+              <div class="field">
+                <label for="title-input">Título</label>
+                <input type="text" id="title-input" placeholder="Nombre del set o track" required>
+              </div>
+              <div class="field">
+                <label for="genre-input">Género (opcional)</label>
+                <input type="text" id="genre-input" placeholder="House, Reggaetón, Techno…">
+              </div>
+              <div class="field">
+                <label for="description-input">Descripción (opcional)</label>
+                <textarea id="description-input" rows="3" placeholder="Notas sobre el set…"></textarea>
+              </div>
+              <div class="field checkbox-field">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="for-sale-input">
+                  <span>Poner esta pista a la venta</span>
+                </label>
+              </div>
+              <div class="field">
+                <label for="price-input">Precio (opcional)</label>
+                <input type="text" id="price-input" placeholder="Ej: 500 CUP, 5 USD, 300 MLC">
+              </div>
+            </div>
+            <div>
+              <div class="field">
+                <label>Archivo de audio</label>
+                <label class="file-drop" id="audio-drop">
+                  <span id="audio-drop-label">MP3, WAV, M4A, OGG o FLAC · máx 60MB</span>
+                  <input type="file" id="audio-input" accept=".mp3,.wav,.m4a,.ogg,.flac" required>
+                </label>
+              </div>
+              <div class="field">
+                <label>Portada (opcional)</label>
+                <label class="file-drop" id="cover-drop">
+                  <span id="cover-drop-label">JPG, PNG o WEBP · máx 8MB</span>
+                  <input type="file" id="cover-input" accept=".jpg,.jpeg,.png,.webp">
+                </label>
+              </div>
+            </div>
+          </div>
+          <button type="submit" class="btn-primary" id="upload-btn" style="margin-top:8px;">Publicar pista</button>
+        </form>
+      </div>
+
+      <div class="panel">
+        <h2>Tu catálogo</h2>
+        <div id="track-list"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Cobros y ventas</h2>
+        <p class="panel-hint">Estos datos se muestran al público cuando alguien quiere comprar una pista.</p>
+        <form id="payment-form">
+          <div class="field">
+            <label for="contact-phone-input">Teléfono de confirmación (WhatsApp)</label>
+            <input type="text" id="contact-phone-input" placeholder="Ej: 53592XXXXX (con código de país, sin + ni espacios)">
+          </div>
+
+          <label>Cuentas para transferencia</label>
+          <div id="accounts-list"></div>
+          <button type="button" class="btn-secondary" id="add-account-btn">+ Agregar cuenta</button>
+
+          <button type="submit" class="btn-primary" style="margin-top:16px;">Guardar datos de cobro</button>
+        </form>
+      </div>
+
+      <div class="panel">
+        <h2>Perfil público</h2>
+        <form id="profile-form">
+          <div class="field">
+            <label for="dj-name-input">Nombre artístico</label>
+            <input type="text" id="dj-name-input" placeholder="Nombre del DJ">
+          </div>
+          <div class="field">
+            <label for="dj-bio-input">Biografía</label>
+            <textarea id="dj-bio-input" rows="3" placeholder="Cuéntale al público quién eres…"></textarea>
+          </div>
+          <div class="field">
+            <label>Foto de perfil (opcional)</label>
+            <label class="file-drop" id="avatar-drop">
+              <span id="avatar-drop-label">JPG, PNG o WEBP · máx 8MB</span>
+              <input type="file" id="avatar-input" accept=".jpg,.jpeg,.png,.webp">
+            </label>
+          </div>
+          <button type="submit" class="btn-primary">Guardar perfil</button>
+        </form>
+      </div>
+
+    </main>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/admin/admin.js"></script>
+</body>
+</html>
