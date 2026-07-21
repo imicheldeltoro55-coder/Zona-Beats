@@ -1,7 +1,7 @@
 {
-  "name": "dj-beats-app",
+  "name": "zona-beats",
   "version": "1.0.0",
-  "description": "Plataforma de streaming para DJ - sin dependencias externas",
+  "description": "Plataforma de streaming - sin dependencias externas",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {

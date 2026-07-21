@@ -27,6 +27,7 @@ const { URL } = require('node:url');
 
 const db = require('./db');
 const { issueStreamToken, validateStreamToken } = require('./streamAuth');
+const { applyWatermark } = require('./watermark');
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'cambiaesto123';
@@ -34,10 +35,15 @@ const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || crypto.randomBy
 
 const UPLOADS_AUDIO = path.join(__dirname, 'uploads', 'audio');
 const UPLOADS_COVERS = path.join(__dirname, 'uploads', 'covers');
-[UPLOADS_AUDIO, UPLOADS_COVERS].forEach(d => fs.mkdirSync(d, { recursive: true }));
+const UPLOADS_RECEIPTS = path.join(__dirname, 'uploads', 'receipts');
+const UPLOADS_WATERMARK = path.join(__dirname, 'uploads', 'watermark');
+const TMP_PROCESSING = path.join(__dirname, 'uploads', 'tmp');
+[UPLOADS_AUDIO, UPLOADS_COVERS, UPLOADS_RECEIPTS, UPLOADS_WATERMARK, TMP_PROCESSING].forEach(d => fs.mkdirSync(d, { recursive: true }));
 
-const MAX_AUDIO_BYTES = 60 * 1024 * 1024; // 60MB por pista
+const MAX_AUDIO_BYTES = 150 * 1024 * 1024; // 150MB por pista (para WAV sin comprimir)
 const MAX_COVER_BYTES = 8 * 1024 * 1024;  // 8MB portada
+const MAX_RECEIPT_BYTES = 12 * 1024 * 1024; // 12MB comprobante (fotos de capturas de pantalla pueden pesar más que una portada)
+const MAX_WATERMARK_BYTES = 10 * 1024 * 1024; // 10MB para el audio corto de la voz de marca de agua
 
 // ---------- Sesión admin simple (cookie firmada, sin dependencias) ----------
 function signSession() {
@@ -205,9 +211,9 @@ route('GET', '/api/tracks', (req, res) => {
   sendJSON(res, 200, { tracks });
 });
 
-// --- API pública: obtener perfil del DJ ---
+// --- API pública: obtener perfil del artista ---
 route('GET', '/api/profile', (req, res) => {
-  const profile = db.prepare('SELECT dj_name, bio, avatar_filename FROM profile WHERE id = 1').get();
+  const profile = db.prepare('SELECT artist_name, bio, avatar_filename FROM profile WHERE id = 1').get();
   sendJSON(res, 200, { profile });
 });
 
@@ -217,6 +223,65 @@ route('GET', '/api/payment-info', (req, res) => {
   let accounts = [];
   try { accounts = JSON.parse(info.accounts_json || '[]'); } catch { accounts = []; }
   sendJSON(res, 200, { contactPhone: info.contact_phone || '', accounts });
+});
+
+// --- API pública: redes sociales del artista ---
+route('GET', '/api/social-links', (req, res) => {
+  const row = db.prepare('SELECT links_json FROM social_links WHERE id = 1').get();
+  let links = [];
+  try { links = JSON.parse(row.links_json || '[]'); } catch { links = []; }
+  sendJSON(res, 200, { links });
+});
+
+// --- API pública: enviar comprobante de pago (crea un pedido que se revisa en el panel) ---
+route('POST', '/api/orders', async (req, res) => {
+  const contentType = req.headers['content-type'] || '';
+  const boundaryMatch = contentType.match(/boundary=(.+)$/);
+  if (!boundaryMatch) return sendJSON(res, 400, { error: 'Falta boundary multipart' });
+
+  let buffer;
+  try {
+    buffer = await readBody(req, MAX_RECEIPT_BYTES + 1024 * 50);
+  } catch {
+    return sendJSON(res, 413, { error: 'La imagen del comprobante es demasiado grande' });
+  }
+
+  const parts = parseMultipart(buffer, boundaryMatch[1]);
+  const fields = {};
+  let receiptPart = null;
+  for (const part of parts) {
+    if (part.filename && part.name === 'receipt') receiptPart = part;
+    else if (part.name) fields[part.name] = part.data.toString('utf8');
+  }
+
+  const trackId = Number(fields.trackId);
+  const buyerName = (fields.buyerName || '').trim().slice(0, 100);
+  const buyerPhone = (fields.buyerPhone || '').trim().slice(0, 40);
+
+  if (!trackId || !buyerName || !buyerPhone || !receiptPart) {
+    return sendJSON(res, 400, { error: 'Faltan datos: nombre, teléfono o comprobante' });
+  }
+
+  const track = db.prepare('SELECT id, title, price_label FROM tracks WHERE id = ?').get(trackId);
+  if (!track) return sendJSON(res, 404, { error: 'Pista no encontrada' });
+
+  const receiptExt = safeExt(receiptPart.filename, '.jpg');
+  if (!ALLOWED_IMAGE_EXT.includes(receiptExt)) {
+    return sendJSON(res, 400, { error: 'El comprobante debe ser una imagen (JPG, PNG o WEBP)' });
+  }
+  if (receiptPart.data.length > MAX_RECEIPT_BYTES) {
+    return sendJSON(res, 413, { error: 'La imagen del comprobante es demasiado grande' });
+  }
+
+  const receiptFilename = `${crypto.randomUUID()}${receiptExt}`;
+  fs.writeFileSync(path.join(UPLOADS_RECEIPTS, receiptFilename), receiptPart.data);
+
+  db.prepare(`
+    INSERT INTO orders (track_id, track_title, price_label, buyer_name, buyer_phone, receipt_filename)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(track.id, track.title, track.price_label || '', buyerName, buyerPhone, receiptFilename);
+
+  sendJSON(res, 201, { ok: true });
 });
 
 // --- API pública: pedir token temporal para reproducir un track ---
@@ -357,11 +422,40 @@ route('POST', '/api/admin/tracks', async (req, res) => {
     return sendJSON(res, 400, { error: 'Formato de audio no permitido' });
   }
   if (audioPart.data.length > MAX_AUDIO_BYTES) {
-    return sendJSON(res, 413, { error: 'Audio demasiado grande (máx 60MB)' });
+    return sendJSON(res, 413, { error: `Audio demasiado grande (máx ${Math.round(MAX_AUDIO_BYTES / 1024 / 1024)}MB)` });
   }
 
-  const audioFilename = `${crypto.randomUUID()}${audioExt}`;
-  fs.writeFileSync(path.join(UPLOADS_AUDIO, audioFilename), audioPart.data);
+  // Guardar el audio subido en una ruta temporal primero, porque si hay marca de agua
+  // configurada necesitamos procesarlo con ffmpeg antes de que sea el archivo "definitivo".
+  const tmpUploadPath = path.join(TMP_PROCESSING, `${crypto.randomUUID()}${audioExt}`);
+  fs.writeFileSync(tmpUploadPath, audioPart.data);
+
+  const watermarkConfig = db.prepare('SELECT * FROM watermark_config WHERE id = 1').get();
+  let savedAudioFilename;
+
+  if (watermarkConfig && watermarkConfig.voice_filename) {
+    const watermarkPath = path.join(UPLOADS_WATERMARK, watermarkConfig.voice_filename);
+    const watermarkedFilename = `${crypto.randomUUID()}.wav`; // ffmpeg siempre exporta a WAV aquí
+    try {
+      await applyWatermark({
+        inputPath: tmpUploadPath,
+        watermarkPath,
+        outputPath: path.join(UPLOADS_AUDIO, watermarkedFilename),
+        intervalSeconds: watermarkConfig.interval_seconds,
+        volume: watermarkConfig.volume,
+      });
+      savedAudioFilename = watermarkedFilename;
+    } catch (err) {
+      console.error('Error aplicando marca de agua:', err.message);
+      return sendJSON(res, 500, { error: 'No se pudo procesar el audio con la marca de agua. Verifica que el archivo no esté dañado.' });
+    } finally {
+      fs.unlinkSync(tmpUploadPath);
+    }
+  } else {
+    // Sin marca de agua configurada: se guarda el audio subido tal cual (mismo formato original).
+    savedAudioFilename = `${crypto.randomUUID()}${audioExt}`;
+    fs.renameSync(tmpUploadPath, path.join(UPLOADS_AUDIO, savedAudioFilename));
+  }
 
   let coverFilename = '';
   if (coverPart && coverPart.data.length > 0) {
@@ -378,7 +472,7 @@ route('POST', '/api/admin/tracks', async (req, res) => {
   const result = db.prepare(`
     INSERT INTO tracks (title, genre, description, audio_filename, cover_filename, price_label, for_sale)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(fields.title, fields.genre || '', fields.description || '', audioFilename, coverFilename, priceLabel, forSale);
+  `).run(fields.title, fields.genre || '', fields.description || '', savedAudioFilename, coverFilename, priceLabel, forSale);
 
   sendJSON(res, 201, { id: Number(result.lastInsertRowid) });
 });
@@ -423,7 +517,7 @@ route('DELETE', '/api/admin/tracks/:id', (req, res, params) => {
   sendJSON(res, 200, { ok: true });
 });
 
-// Actualizar perfil del DJ (nombre, bio, avatar)
+// Actualizar perfil del artista (nombre, bio, avatar)
 route('POST', '/api/admin/profile', async (req, res) => {
   if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
 
@@ -457,8 +551,8 @@ route('POST', '/api/admin/profile', async (req, res) => {
     }
   }
 
-  db.prepare('UPDATE profile SET dj_name = ?, bio = ?, avatar_filename = ? WHERE id = 1')
-    .run(fields.dj_name || current.dj_name, fields.bio ?? current.bio, avatarFilename);
+  db.prepare('UPDATE profile SET artist_name = ?, bio = ?, avatar_filename = ? WHERE id = 1')
+    .run(fields.artist_name || current.artist_name, fields.bio ?? current.bio, avatarFilename);
 
   sendJSON(res, 200, { ok: true });
 });
@@ -496,6 +590,169 @@ route('POST', '/api/admin/payment-info', async (req, res) => {
   } catch {
     sendJSON(res, 400, { error: 'Solicitud inválida' });
   }
+});
+
+// Obtener redes sociales (vista admin)
+route('GET', '/api/admin/social-links', (req, res) => {
+  if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
+  const row = db.prepare('SELECT links_json FROM social_links WHERE id = 1').get();
+  let links = [];
+  try { links = JSON.parse(row.links_json || '[]'); } catch { links = []; }
+  sendJSON(res, 200, { links });
+});
+
+// Actualizar la lista completa de redes sociales (nombre + link cada una, cualquier plataforma)
+route('POST', '/api/admin/social-links', async (req, res) => {
+  if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
+  try {
+    const body = await readBody(req, 1024 * 20);
+    const { links } = JSON.parse(body.toString('utf8'));
+
+    if (!Array.isArray(links)) {
+      return sendJSON(res, 400, { error: 'Formato de redes sociales inválido' });
+    }
+
+    const cleanLinks = links
+      .filter(l => l && (l.label || l.url))
+      .map(l => ({
+        label: String(l.label || '').slice(0, 40).trim(),
+        url: String(l.url || '').slice(0, 500).trim(),
+      }))
+      .filter(l => l.url); // sin URL no tiene sentido guardar la entrada
+
+    // Validación básica: solo http(s), para no guardar cosas como javascript: en un link clicable
+    for (const l of cleanLinks) {
+      if (!/^https?:\/\//i.test(l.url)) {
+        return sendJSON(res, 400, { error: `El link "${l.url}" debe empezar con http:// o https://` });
+      }
+    }
+
+    db.prepare('UPDATE social_links SET links_json = ? WHERE id = 1').run(JSON.stringify(cleanLinks));
+    sendJSON(res, 200, { ok: true });
+  } catch {
+    sendJSON(res, 400, { error: 'Solicitud inválida' });
+  }
+});
+
+// ---------- Pedidos (comprobantes de compra) ----------
+
+// Listar pedidos pendientes de revisión
+route('GET', '/api/admin/orders', (req, res) => {
+  if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
+  const orders = db.prepare('SELECT * FROM orders ORDER BY created_at DESC').all();
+  sendJSON(res, 200, { orders });
+});
+
+// Ver la imagen del comprobante de un pedido específico
+route('GET', '/api/admin/orders/:id/receipt', (req, res, params) => {
+  if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
+  const order = db.prepare('SELECT receipt_filename FROM orders WHERE id = ?').get(params.id);
+  if (!order) return sendJSON(res, 404, { error: 'Pedido no encontrado' });
+  const filePath = path.join(UPLOADS_RECEIPTS, order.receipt_filename);
+  const ext = path.extname(order.receipt_filename).toLowerCase();
+  sendFile(res, filePath, contentTypeForImage(ext));
+});
+
+// Eliminar un pedido ya revisado (borra también el archivo del comprobante del disco)
+route('DELETE', '/api/admin/orders/:id', (req, res, params) => {
+  if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
+  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(params.id);
+  if (!order) return sendJSON(res, 404, { error: 'Pedido no encontrado' });
+
+  const receiptPath = path.join(UPLOADS_RECEIPTS, order.receipt_filename);
+  if (fs.existsSync(receiptPath)) fs.unlinkSync(receiptPath);
+
+  db.prepare('DELETE FROM orders WHERE id = ?').run(params.id);
+  sendJSON(res, 200, { ok: true });
+});
+
+// ---------- Marca de agua audible ----------
+
+const ALLOWED_WATERMARK_EXT = ['.mp3', '.wav', '.m4a', '.ogg', '.flac'];
+
+// Obtener configuración actual (para mostrar en el panel admin)
+route('GET', '/api/admin/watermark', (req, res) => {
+  if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
+  const config = db.prepare('SELECT * FROM watermark_config WHERE id = 1').get();
+  sendJSON(res, 200, {
+    active: Boolean(config.voice_filename),
+    intervalSeconds: config.interval_seconds,
+    volume: config.volume,
+  });
+});
+
+// Subir o reemplazar el audio de voz de la marca de agua, y/o actualizar intervalo/volumen
+route('POST', '/api/admin/watermark', async (req, res) => {
+  if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
+
+  const contentType = req.headers['content-type'] || '';
+  const boundaryMatch = contentType.match(/boundary=(.+)$/);
+  if (!boundaryMatch) return sendJSON(res, 400, { error: 'Falta boundary multipart' });
+
+  let buffer;
+  try {
+    buffer = await readBody(req, MAX_WATERMARK_BYTES + 1024 * 50);
+  } catch {
+    return sendJSON(res, 413, { error: 'Archivo demasiado grande' });
+  }
+
+  const parts = parseMultipart(buffer, boundaryMatch[1]);
+  const fields = {};
+  let voicePart = null;
+  for (const part of parts) {
+    if (part.filename && part.name === 'voice') voicePart = part;
+    else if (part.name) fields[part.name] = part.data.toString('utf8');
+  }
+
+  const current = db.prepare('SELECT * FROM watermark_config WHERE id = 1').get();
+  let voiceFilename = current.voice_filename;
+
+  if (voicePart && voicePart.data.length > 0) {
+    const ext = safeExt(voicePart.filename, '.mp3');
+    if (!ALLOWED_WATERMARK_EXT.includes(ext)) {
+      return sendJSON(res, 400, { error: 'Formato de audio no permitido para la marca de agua' });
+    }
+    if (voicePart.data.length > MAX_WATERMARK_BYTES) {
+      return sendJSON(res, 413, { error: `El audio de marca de agua debe pesar menos de ${MAX_WATERMARK_BYTES / 1024 / 1024}MB` });
+    }
+    // Borrar la voz anterior si existía, para no acumular archivos huérfanos
+    if (current.voice_filename) {
+      const oldPath = path.join(UPLOADS_WATERMARK, current.voice_filename);
+      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+    }
+    voiceFilename = `${crypto.randomUUID()}${ext}`;
+    fs.writeFileSync(path.join(UPLOADS_WATERMARK, voiceFilename), voicePart.data);
+  }
+
+  const intervalSeconds = fields.intervalSeconds ? Math.max(5, Math.min(600, parseInt(fields.intervalSeconds, 10) || 20)) : current.interval_seconds;
+  const volume = fields.volume ? Math.max(0.05, Math.min(1, parseFloat(fields.volume) || 0.35)) : current.volume;
+
+  db.prepare('UPDATE watermark_config SET voice_filename = ?, interval_seconds = ?, volume = ? WHERE id = 1')
+    .run(voiceFilename, intervalSeconds, volume);
+
+  sendJSON(res, 200, { ok: true, active: Boolean(voiceFilename) });
+});
+
+// Quitar la marca de agua (deja de aplicarse a las pistas nuevas; no reprocesa las ya subidas)
+route('DELETE', '/api/admin/watermark', (req, res) => {
+  if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
+  const current = db.prepare('SELECT * FROM watermark_config WHERE id = 1').get();
+  if (current.voice_filename) {
+    const voicePath = path.join(UPLOADS_WATERMARK, current.voice_filename);
+    if (fs.existsSync(voicePath)) fs.unlinkSync(voicePath);
+  }
+  db.prepare("UPDATE watermark_config SET voice_filename = '' WHERE id = 1").run();
+  sendJSON(res, 200, { ok: true });
+});
+
+// Escuchar la voz de marca de agua actual (para que el admin la confirme antes de activarla)
+route('GET', '/api/admin/watermark/preview', (req, res) => {
+  if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
+  const config = db.prepare('SELECT voice_filename FROM watermark_config WHERE id = 1').get();
+  if (!config.voice_filename) return sendJSON(res, 404, { error: 'No hay marca de agua configurada' });
+  const filePath = path.join(UPLOADS_WATERMARK, config.voice_filename);
+  const ext = path.extname(config.voice_filename).toLowerCase();
+  sendFile(res, filePath, contentTypeForAudio(ext));
 });
 
 // ---------- Archivos estáticos (frontend) ----------
@@ -570,3 +827,10 @@ server.listen(PORT, () => {
   console.log(`Servidor corriendo en http://localhost:${PORT}`);
   console.log(`Panel admin en http://localhost:${PORT}/admin`);
 });
+
+// Timeouts generosos para subidas de audio grandes (WAV) en conexiones lentas.
+// Por defecto Node corta la conexión a los 2 minutos de inactividad; lo subimos a 10.
+server.timeout = 10 * 60 * 1000;
+server.headersTimeout = 10 * 60 * 1000 + 5000;
+server.requestTimeout = 10 * 60 * 1000;
+server.keepAliveTimeout = 10 * 60 * 1000;

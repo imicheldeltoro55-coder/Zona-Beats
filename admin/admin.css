@@ -256,6 +256,134 @@ label {
 }
 .btn-delete:hover { border-color: var(--danger); color: var(--danger); }
 
+/* ---------- Comprobantes de compra ---------- */
+.panel-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.badge-count {
+  background: var(--accent);
+  color: #0c0a12;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 20px;
+  display: none;
+}
+.badge-count.show { display: inline-block; }
+
+.badge-count.badge-inactive {
+  background: var(--line);
+  color: var(--text-faint);
+}
+
+.watermark-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.watermark-actions .btn-secondary,
+.watermark-actions .btn-delete {
+  width: auto;
+  flex: 1;
+  min-width: 160px;
+}
+
+.order-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--live);
+  background: rgba(61, 255, 224, 0.04);
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.order-item .receipt-thumb {
+  width: 52px;
+  height: 52px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.order-item .info { flex: 1; min-width: 160px; }
+.order-item .info .buyer {
+  font-weight: 700;
+  font-size: 14px;
+}
+.order-item .info .track {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+.order-item .info .meta {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-family: 'JetBrains Mono', monospace;
+  margin-top: 4px;
+}
+.order-item .actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.btn-whatsapp-order {
+  background: var(--live);
+  color: #0c0a12;
+  font-weight: 700;
+  padding: 7px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.btn-whatsapp-order:hover { filter: brightness(1.08); }
+
+/* ---------- Modal de vista ampliada del comprobante ---------- */
+.receipt-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 5, 10, 0.85);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 400;
+  padding: 24px;
+}
+.receipt-modal-overlay.active { display: flex; }
+.receipt-modal-box {
+  position: relative;
+  max-width: 90vw;
+  max-height: 90vh;
+}
+.receipt-modal-box img {
+  max-width: 100%;
+  max-height: 90vh;
+  border-radius: 10px;
+  display: block;
+}
+.receipt-modal-box .modal-close {
+  position: absolute;
+  top: -14px;
+  right: -14px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #0c0a12;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .track-list-item .price-edit {
   display: flex;
   align-items: center;
@@ -283,6 +411,30 @@ label {
   flex-shrink: 0;
 }
 .btn-save-price:hover { background: #ff5c92; }
+
+.upload-progress-wrap {
+  margin: 10px 0 4px;
+}
+.upload-progress-track {
+  height: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.upload-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.15s ease;
+}
+.upload-progress-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-faint);
+  text-align: center;
+}
 
 .toast {
   position: fixed;

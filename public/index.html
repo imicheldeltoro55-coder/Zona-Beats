@@ -16,8 +16,9 @@
     <img class="hero-avatar" id="avatar" src="" alt="" style="display:none;">
     <div>
       <div class="hero-eyebrow"><span class="pulse"></span> EN VIVO EN LA PLATAFORMA</div>
-      <h1 class="hero-title" id="dj-name">Cargando…</h1>
-      <p class="hero-bio" id="dj-bio"></p>
+      <h1 class="hero-title" id="artist-name">Cargando…</h1>
+      <p class="hero-bio" id="artist-bio"></p>
+      <div class="hero-social" id="hero-social"></div>
     </div>
   </header>
 
@@ -29,7 +30,7 @@
   <main id="track-grid" class="track-grid"></main>
   <div id="empty-state" class="empty-state" style="display:none;">
     <h3>Aún no hay pistas</h3>
-    <p>El DJ está preparando su primer set. Vuelve pronto.</p>
+    <p>Está preparando el primer set. Vuelve pronto.</p>
   </div>
 
   <footer class="footer-note">
@@ -79,14 +80,45 @@
       <div class="modal-price" id="modal-price">—</div>
 
       <p class="modal-instructions">
-        Transfiere el monto a una de estas cuentas y luego confirma el pago por WhatsApp para recibir tu pista.
+        Transfiere el monto a una de estas cuentas, luego completa tus datos y adjunta el comprobante. Se revisa y te contactan para enviarte tu pista.
       </p>
 
       <div class="modal-accounts" id="modal-accounts"></div>
 
-      <a class="modal-whatsapp-btn" id="modal-whatsapp-btn" href="#" target="_blank" rel="noopener">
-        Confirmar pago por WhatsApp
-      </a>
+      <form id="order-form">
+        <div class="modal-field">
+          <label for="buyer-name-input">Tu nombre</label>
+          <input type="text" id="buyer-name-input" placeholder="¿Cómo te llamas?" required>
+        </div>
+        <div class="modal-field">
+          <label for="buyer-phone-input">Tu teléfono (para que te contacten)</label>
+          <input type="text" id="buyer-phone-input" placeholder="Ej: 53512345678" required>
+        </div>
+
+        <div class="modal-receipt-step">
+          <label class="modal-receipt-label" for="receipt-input">
+            Foto del comprobante de la transferencia
+          </label>
+          <label class="modal-receipt-drop" id="receipt-drop">
+            <span id="receipt-drop-text">Toca para subir la foto del comprobante</span>
+            <img id="receipt-preview" style="display:none;" alt="Comprobante subido">
+            <input type="file" id="receipt-input" accept="image/*" capture="environment" required>
+          </label>
+        </div>
+
+        <button type="submit" class="modal-whatsapp-btn" id="order-submit-btn" disabled>
+          Completa tus datos y el comprobante
+        </button>
+      </form>
+
+      <div class="modal-success" id="modal-success" style="display:none;">
+        <div class="modal-success-icon">✓</div>
+        <div class="modal-success-title">Comprobante enviado</div>
+        <p class="modal-success-text">Ya quedó registrado. Ahora confírmalo por WhatsApp con un solo toque:</p>
+        <a class="modal-whatsapp-btn" id="modal-whatsapp-btn" href="#" target="_blank" rel="noopener">
+          Avisar por WhatsApp
+        </a>
+      </div>
     </div>
   </div>
 
