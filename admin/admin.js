@@ -14,7 +14,12 @@
   const titleInput = document.getElementById('title-input');
   const genreInput = document.getElementById('genre-input');
   const descriptionInput = document.getElementById('description-input');
+  const isPlaylistInput = document.getElementById('is-playlist-input');
+  const artistCreditInput = document.getElementById('artist-credit-input');
+  const playlistOnlyFields = document.getElementById('playlist-only-fields');
+  const catalogOnlyFields = document.getElementById('catalog-only-fields');
   const forSaleInput = document.getElementById('for-sale-input');
+  const isExclusiveInput = document.getElementById('is-exclusive-input');
   const priceInput = document.getElementById('price-input');
   const audioInput = document.getElementById('audio-input');
   const coverInput = document.getElementById('cover-input');
@@ -55,6 +60,14 @@
   const addSocialLinkBtn = document.getElementById('add-social-link-btn');
   const socialLinksSaveBtn = document.getElementById('social-links-save-btn');
 
+  const exchangeRatesForm = document.getElementById('exchange-rates-form');
+  const exchangeRatesList = document.getElementById('exchange-rates-list');
+
+  const siteConfigForm = document.getElementById('site-config-form');
+  const promoActiveInput = document.getElementById('promo-active-input');
+  const promoTextInput = document.getElementById('promo-text-input');
+  const scheduleTextInput = document.getElementById('schedule-text-input');
+
   const toast = document.getElementById('toast');
 
   function showToast(msg, isError = false) {
@@ -77,6 +90,8 @@
     loadOrders();
     loadWatermarkConfig();
     loadSocialLinks();
+    loadExchangeRates();
+    loadSiteConfig();
   }
 
   function showLogin() {
@@ -115,8 +130,11 @@
   });
 
   // ---------- Drag/drop visual feedback ----------
+  // El <label class="file-drop"> ya envuelve al <input type="file"> y lo abre de forma
+  // nativa al tocarlo. No agregamos un .click() manual aquí: en varios navegadores
+  // móviles eso dispara el selector dos veces y termina bloqueando el diálogo entero
+  // (por eso "no hacía nada" al tocar en el teléfono).
   function wireFileDrop(dropEl, inputEl, labelEl, defaultLabel) {
-    dropEl.addEventListener('click', () => inputEl.click());
     inputEl.addEventListener('change', () => {
       if (inputEl.files.length > 0) {
         labelEl.textContent = inputEl.files[0].name;
@@ -127,9 +145,22 @@
       }
     });
   }
-  wireFileDrop(audioDrop, audioInput, document.getElementById('audio-drop-label'), 'MP3, WAV, M4A, OGG o FLAC · máx 60MB');
+  wireFileDrop(audioDrop, audioInput, document.getElementById('audio-drop-label'), 'MP3, WAV, M4A, OGG o FLAC · máx 150MB');
   wireFileDrop(coverDrop, coverInput, document.getElementById('cover-drop-label'), 'JPG, PNG o WEBP · máx 8MB');
   wireFileDrop(avatarDrop, avatarInput, document.getElementById('avatar-drop-label'), 'JPG, PNG o WEBP · máx 8MB');
+
+  // Playlist (gratis, con colaboradores) y Catálogo (venta, con precio/exclusividad)
+  // son mutuamente excluyentes en el formulario de subida.
+  isPlaylistInput.addEventListener('change', () => {
+    const isPlaylist = isPlaylistInput.checked;
+    playlistOnlyFields.style.display = isPlaylist ? 'block' : 'none';
+    catalogOnlyFields.style.display = isPlaylist ? 'none' : 'block';
+    if (isPlaylist) {
+      forSaleInput.checked = false;
+      isExclusiveInput.checked = false;
+      priceInput.value = '';
+    }
+  });
 
   // ---------- Subida de pista ----------
   uploadForm.addEventListener('submit', (e) => {
@@ -149,8 +180,11 @@
     formData.append('title', titleInput.value);
     formData.append('genre', genreInput.value);
     formData.append('description', descriptionInput.value);
-    formData.append('priceLabel', priceInput.value);
+    formData.append('isPlaylist', isPlaylistInput.checked ? '1' : '0');
+    formData.append('artistCredit', artistCreditInput.value);
     formData.append('forSale', forSaleInput.checked ? '1' : '0');
+    formData.append('isExclusive', isExclusiveInput.checked ? '1' : '0');
+    formData.append('priceCup', priceInput.value);
     formData.append('audio', audioInput.files[0]);
     if (coverInput.files.length) formData.append('cover', coverInput.files[0]);
 
@@ -178,6 +212,10 @@
         showToast('Pista publicada correctamente.');
         uploadForm.reset();
         forSaleInput.checked = false;
+        isExclusiveInput.checked = false;
+        isPlaylistInput.checked = false;
+        playlistOnlyFields.style.display = 'none';
+        catalogOnlyFields.style.display = 'block';
         priceInput.value = '';
         document.getElementById('audio-drop-label').textContent = 'MP3, WAV, M4A, OGG o FLAC · máx 150MB';
         document.getElementById('cover-drop-label').textContent = 'JPG, PNG o WEBP · máx 8MB';
@@ -207,9 +245,19 @@
     xhr.send(formData);
   });
 
-  // ---------- Catálogo ----------
+  // ---------- Catálogo (con tabs: catálogo / playlist / vip) ----------
+  let currentAdminListSection = 'catalog';
+
+  document.querySelectorAll('.admin-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      currentAdminListSection = tab.dataset.listSection;
+      document.querySelectorAll('.admin-tab').forEach(t => t.classList.toggle('active', t === tab));
+      loadTracks();
+    });
+  });
+
   async function loadTracks() {
-    const res = await fetch('/api/admin/tracks');
+    const res = await fetch(`/api/admin/tracks?type=${currentAdminListSection}`);
     if (!res.ok) return;
     const { tracks } = await res.json();
     renderTrackList(tracks);
@@ -218,44 +266,70 @@
   function renderTrackList(tracks) {
     trackList.innerHTML = '';
     if (!tracks.length) {
-      trackList.innerHTML = '<div class="empty-hint">Todavía no has subido ninguna pista.</div>';
+      const hints = {
+        catalog: 'Todavía no has subido ninguna pista al catálogo.',
+        playlist: 'Todavía no has subido ninguna colaboración gratuita.',
+        vip: 'Todavía no se ha vendido ninguna pista exclusiva.',
+      };
+      trackList.innerHTML = `<div class="empty-hint">${hints[currentAdminListSection]}</div>`;
       return;
     }
     tracks.forEach((track) => {
       const item = document.createElement('div');
       item.className = 'track-list-item';
       const coverSrc = track.cover_filename ? `/api/cover/${track.id}` : '';
+      const metaExtra = track.artist_credit ? ` · ${escapeHtml(track.artist_credit)}` : '';
+
+      let priceEditHtml = '';
+      if (currentAdminListSection === 'catalog') {
+        priceEditHtml = `
+          <div class="price-edit">
+            <label class="checkbox-label">
+              <input type="checkbox" class="track-for-sale" ${track.for_sale ? 'checked' : ''}>
+              <span>En venta</span>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" class="track-exclusive" ${track.is_exclusive ? 'checked' : ''}>
+              <span>Exclusiva</span>
+            </label>
+            <input type="text" class="track-price" placeholder="Precio en CUP" value="${track.price_cup || ''}">
+            <button type="button" class="btn-save-price" data-id="${track.id}">Guardar</button>
+          </div>
+        `;
+      } else if (currentAdminListSection === 'vip') {
+        priceEditHtml = `<div class="vip-sold-tag">Vendida · ${escapeHtml(track.price_label || '')}</div>`;
+      }
+
       item.innerHTML = `
         ${coverSrc ? `<img src="${coverSrc}" alt="">` : `<img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='44' height='44'/%3E" alt="">`}
         <div class="info">
           <div class="t">${escapeHtml(track.title)}</div>
-          <div class="m">${escapeHtml(track.genre || 'Sin género')} · ${track.plays} reproducciones</div>
+          <div class="m">${escapeHtml(track.genre || 'Sin género')}${metaExtra} · ${track.plays} reproducciones</div>
         </div>
-        <div class="price-edit">
-          <label class="checkbox-label">
-            <input type="checkbox" class="track-for-sale" ${track.for_sale ? 'checked' : ''}>
-            <span>En venta</span>
-          </label>
-          <input type="text" class="track-price" placeholder="Ej: 500 CUP" value="${escapeHtml(track.price_label || '')}">
-          <button type="button" class="btn-save-price" data-id="${track.id}">Guardar</button>
-        </div>
+        ${priceEditHtml}
         <button class="btn-delete" data-id="${track.id}">Eliminar</button>
       `;
       item.querySelector('.btn-delete').addEventListener('click', () => deleteTrack(track.id, track.title));
-      item.querySelector('.btn-save-price').addEventListener('click', () => {
-        const priceLabel = item.querySelector('.track-price').value;
-        const forSale = item.querySelector('.track-for-sale').checked;
-        savePrice(track.id, priceLabel, forSale);
-      });
+
+      const saveBtn = item.querySelector('.btn-save-price');
+      if (saveBtn) {
+        saveBtn.addEventListener('click', () => {
+          const priceCup = item.querySelector('.track-price').value;
+          const forSale = item.querySelector('.track-for-sale').checked;
+          const isExclusive = item.querySelector('.track-exclusive').checked;
+          savePrice(track.id, priceCup, forSale, isExclusive);
+        });
+      }
+
       trackList.appendChild(item);
     });
   }
 
-  async function savePrice(id, priceLabel, forSale) {
+  async function savePrice(id, priceCup, forSale, isExclusive) {
     const res = await fetch(`/api/admin/tracks/${id}/price`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ priceLabel, forSale }),
+      body: JSON.stringify({ priceCup, forSale, isExclusive }),
     });
     if (res.ok) {
       showToast('Precio actualizado.');
@@ -308,12 +382,23 @@
   });
 
   // ---------- Cobros y ventas ----------
-  function addAccountRow(bank = '', number = '') {
+  const CURRENCY_OPTIONS = [
+    { code: 'CUP', label: 'CUP' },
+    { code: 'MLC', label: 'MLC' },
+    { code: 'USDT_BEP20', label: 'USDT (BEP20)' },
+    { code: 'USDT_TRC20', label: 'USDT (TRC20)' },
+    { code: 'USDT_POLYGON', label: 'USDT (Polygon)' },
+    { code: 'SALDO_MOVIL', label: 'Saldo Móvil' },
+  ];
+
+  function addAccountRow(currency = 'CUP', bank = '', number = '') {
     const row = document.createElement('div');
-    row.className = 'account-row';
+    row.className = 'account-row with-currency';
+    const options = CURRENCY_OPTIONS.map(c => `<option value="${c.code}" ${c.code === currency ? 'selected' : ''}>${c.label}</option>`).join('');
     row.innerHTML = `
-      <input type="text" class="account-bank" placeholder="Banco (ej: BPA, BANDEC, MLC)" value="${escapeHtml(bank)}">
-      <input type="text" class="account-number" placeholder="Número de tarjeta/cuenta" value="${escapeHtml(number)}">
+      <select class="account-currency">${options}</select>
+      <input type="text" class="account-bank" placeholder="Banco / plataforma" value="${escapeHtml(bank)}">
+      <input type="text" class="account-number" placeholder="Número de cuenta/tarjeta" value="${escapeHtml(number)}">
       <button type="button" class="account-remove-btn" aria-label="Quitar cuenta">&times;</button>
     `;
     row.querySelector('.account-remove-btn').addEventListener('click', () => row.remove());
@@ -329,7 +414,7 @@
     contactPhoneInput.value = contactPhone || '';
     accountsList.innerHTML = '';
     if (accounts.length) {
-      accounts.forEach(acc => addAccountRow(acc.bank, acc.number));
+      accounts.forEach(acc => addAccountRow(acc.currency, acc.bank, acc.number));
     } else {
       addAccountRow();
     }
@@ -338,6 +423,7 @@
   paymentForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const accounts = Array.from(accountsList.querySelectorAll('.account-row')).map(row => ({
+      currency: row.querySelector('.account-currency').value,
       bank: row.querySelector('.account-bank').value.trim(),
       number: row.querySelector('.account-number').value.trim(),
     })).filter(a => a.bank || a.number);
@@ -398,10 +484,11 @@
         <div class="info">
           <div class="buyer">${escapeHtml(order.buyer_name)}</div>
           <div class="track">${escapeHtml(order.track_title)}${order.price_label ? ` · ${escapeHtml(order.price_label)}` : ''}</div>
-          <div class="meta">${escapeHtml(order.buyer_phone)} · ${formatOrderDate(order.created_at)}</div>
+          <div class="meta">${escapeHtml(order.buyer_phone)} · ${formatOrderDate(order.created_at)}${order.status === 'approved' ? ' · <span class=\"order-approved-tag\">Aprobado</span>' : ''}</div>
         </div>
         <div class="actions">
           ${whatsappHref ? `<a class="btn-whatsapp-order" href="${whatsappHref}" target="_blank" rel="noopener">WhatsApp</a>` : ''}
+          ${order.status !== 'approved' ? `<button class="btn-approve-order" type="button">Aprobar</button>` : ''}
           <button class="btn-delete" type="button">Eliminar</button>
         </div>
       `;
@@ -411,10 +498,27 @@
         receiptModalOverlay.classList.add('active');
       });
 
+      const approveBtn = item.querySelector('.btn-approve-order');
+      if (approveBtn) {
+        approveBtn.addEventListener('click', () => approveOrder(order.id));
+      }
+
       item.querySelector('.btn-delete').addEventListener('click', () => deleteOrder(order.id, order.buyer_name));
 
       ordersList.appendChild(item);
     });
+  }
+
+  async function approveOrder(id) {
+    const res = await fetch(`/api/admin/orders/${id}/approve`, { method: 'POST' });
+    if (res.ok) {
+      const result = await res.json();
+      showToast(result.trackMarkedSold ? 'Aprobado — la pista exclusiva pasó a Beats VIP.' : 'Pedido aprobado.');
+      loadOrders();
+      loadTracks();
+    } else {
+      showToast('No se pudo aprobar el pedido.', true);
+    }
   }
 
   async function deleteOrder(id, buyerName) {
@@ -440,7 +544,6 @@
   let watermarkHasVoice = false;
   let watermarkPendingFile = null;
 
-  watermarkVoiceDrop.addEventListener('click', () => watermarkVoiceInput.click());
   watermarkVoiceInput.addEventListener('change', () => {
     if (watermarkVoiceInput.files.length > 0) {
       watermarkPendingFile = watermarkVoiceInput.files[0];
@@ -595,6 +698,101 @@
     } finally {
       socialLinksSaveBtn.disabled = false;
       socialLinksSaveBtn.textContent = 'Guardar redes sociales';
+    }
+  });
+
+  // ---------- Tasas de cambio ----------
+  const CURRENCY_LABELS = {
+    CUP: 'CUP',
+    MLC: 'MLC',
+    USDT_BEP20: 'USDT (BEP20)',
+    USDT_TRC20: 'USDT (TRC20)',
+    USDT_POLYGON: 'USDT (Polygon)',
+    SALDO_MOVIL: 'Saldo Móvil',
+  };
+
+  function renderExchangeRates(rates) {
+    exchangeRatesList.innerHTML = '';
+    rates.forEach((rate) => {
+      const row = document.createElement('div');
+      row.className = 'rate-row';
+      const isCup = rate.code === 'CUP';
+      row.innerHTML = `
+        <div class="rate-row-label">${escapeHtml(rate.label)}</div>
+        <div class="rate-row-input-wrap">
+          ${isCup
+            ? `<span>Moneda base — siempre 1</span>`
+            : `<input type="text" class="rate-value" data-code="${rate.code}" data-label="${escapeHtml(rate.label)}" placeholder="0" value="${rate.cupPerUnit || ''}"><span>CUP por unidad</span>`
+          }
+        </div>
+      `;
+      exchangeRatesList.appendChild(row);
+    });
+  }
+
+  async function loadExchangeRates() {
+    const res = await fetch('/api/admin/exchange-rates');
+    if (!res.ok) return;
+    const { rates } = await res.json();
+    const byCode = Object.fromEntries(rates.map(r => [r.code, r]));
+    const fullList = Object.entries(CURRENCY_LABELS).map(([code, label]) => ({
+      code,
+      label,
+      cupPerUnit: byCode[code] ? byCode[code].cupPerUnit : (code === 'CUP' ? 1 : 0),
+    }));
+    renderExchangeRates(fullList);
+  }
+
+  exchangeRatesForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const rates = [{ code: 'CUP', label: 'CUP', cupPerUnit: 1 }];
+    exchangeRatesList.querySelectorAll('.rate-value').forEach((input) => {
+      rates.push({
+        code: input.dataset.code,
+        label: input.dataset.label,
+        cupPerUnit: parseFloat(input.value) || 0,
+      });
+    });
+
+    const res = await fetch('/api/admin/exchange-rates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rates }),
+    });
+
+    if (res.ok) {
+      showToast('Tasas de cambio guardadas.');
+    } else {
+      showToast('No se pudieron guardar las tasas.', true);
+    }
+  });
+
+  // ---------- Promociones y horario ----------
+  async function loadSiteConfig() {
+    const res = await fetch('/api/admin/site-config');
+    if (!res.ok) return;
+    const config = await res.json();
+    promoActiveInput.checked = config.promoActive;
+    promoTextInput.value = config.promoText || '';
+    scheduleTextInput.value = config.scheduleText || '';
+  }
+
+  siteConfigForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const res = await fetch('/api/admin/site-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        promoActive: promoActiveInput.checked,
+        promoText: promoTextInput.value.trim(),
+        scheduleText: scheduleTextInput.value.trim(),
+      }),
+    });
+
+    if (res.ok) {
+      showToast('Configuración guardada.');
+    } else {
+      showToast('No se pudo guardar la configuración.', true);
     }
   });
 

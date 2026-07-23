@@ -13,12 +13,17 @@ db.exec(`
     title TEXT NOT NULL,
     genre TEXT DEFAULT '',
     description TEXT DEFAULT '',
+    artist_credit TEXT DEFAULT '',
     audio_filename TEXT NOT NULL,
     cover_filename TEXT DEFAULT '',
     duration_seconds INTEGER DEFAULT 0,
     plays INTEGER DEFAULT 0,
     price_label TEXT DEFAULT '',
+    price_cup REAL DEFAULT 0,
     for_sale INTEGER DEFAULT 0,
+    is_playlist INTEGER DEFAULT 0,
+    is_exclusive INTEGER DEFAULT 0,
+    sold INTEGER DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -46,9 +51,11 @@ db.exec(`
     track_id INTEGER NOT NULL,
     track_title TEXT NOT NULL,
     price_label TEXT DEFAULT '',
+    currency TEXT DEFAULT 'CUP',
     buyer_name TEXT NOT NULL,
     buyer_phone TEXT NOT NULL,
     receipt_filename TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -63,6 +70,18 @@ db.exec(`
     id INTEGER PRIMARY KEY CHECK (id = 1),
     links_json TEXT DEFAULT '[]'
   );
+
+  CREATE TABLE IF NOT EXISTS exchange_rates (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    rates_json TEXT DEFAULT '[]'
+  );
+
+  CREATE TABLE IF NOT EXISTS site_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    promo_text TEXT DEFAULT '',
+    promo_active INTEGER DEFAULT 0,
+    schedule_text TEXT DEFAULT ''
+  );
 `);
 
 // Migración simple para bases de datos ya existentes (creadas antes de agregar precio/venta)
@@ -72,6 +91,29 @@ if (!trackCols.includes('price_label')) {
 }
 if (!trackCols.includes('for_sale')) {
   db.exec('ALTER TABLE tracks ADD COLUMN for_sale INTEGER DEFAULT 0');
+}
+if (!trackCols.includes('price_cup')) {
+  db.exec('ALTER TABLE tracks ADD COLUMN price_cup REAL DEFAULT 0');
+}
+if (!trackCols.includes('is_playlist')) {
+  db.exec('ALTER TABLE tracks ADD COLUMN is_playlist INTEGER DEFAULT 0');
+}
+if (!trackCols.includes('is_exclusive')) {
+  db.exec('ALTER TABLE tracks ADD COLUMN is_exclusive INTEGER DEFAULT 0');
+}
+if (!trackCols.includes('sold')) {
+  db.exec('ALTER TABLE tracks ADD COLUMN sold INTEGER DEFAULT 0');
+}
+if (!trackCols.includes('artist_credit')) {
+  db.exec("ALTER TABLE tracks ADD COLUMN artist_credit TEXT DEFAULT ''");
+}
+
+const orderCols = db.prepare("PRAGMA table_info(orders)").all().map(c => c.name);
+if (!orderCols.includes('currency')) {
+  db.exec("ALTER TABLE orders ADD COLUMN currency TEXT DEFAULT 'CUP'");
+}
+if (!orderCols.includes('status')) {
+  db.exec("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'pending'");
 }
 
 // Migración de bases de datos creadas antes de renombrar dj_name -> artist_name
@@ -109,6 +151,27 @@ if (!socialExists) {
     { label: 'Instagram', url: 'https://www.instagram.com/jlarryrg' },
   ]);
   db.prepare('INSERT INTO social_links (id, links_json) VALUES (1, ?)').run(defaultLinks);
+}
+
+// Asegurar que exista una fila de tasas de cambio (CUP es la moneda base con tasa fija 1,
+// las demás empiezan en 0 hasta que el admin las configure con la tasa real del día).
+const ratesExist = db.prepare('SELECT id FROM exchange_rates WHERE id = 1').get();
+if (!ratesExist) {
+  const defaultRates = JSON.stringify([
+    { code: 'CUP', label: 'CUP', cupPerUnit: 1 },
+    { code: 'MLC', label: 'MLC', cupPerUnit: 0 },
+    { code: 'USDT_BEP20', label: 'USDT (BEP20)', cupPerUnit: 0 },
+    { code: 'USDT_TRC20', label: 'USDT (TRC20)', cupPerUnit: 0 },
+    { code: 'USDT_POLYGON', label: 'USDT (Polygon)', cupPerUnit: 0 },
+    { code: 'SALDO_MOVIL', label: 'Saldo Móvil', cupPerUnit: 0 },
+  ]);
+  db.prepare('INSERT INTO exchange_rates (id, rates_json) VALUES (1, ?)').run(defaultRates);
+}
+
+// Asegurar que exista una fila de configuración del sitio (promo + horario)
+const siteConfigExists = db.prepare('SELECT id FROM site_config WHERE id = 1').get();
+if (!siteConfigExists) {
+  db.prepare(`INSERT INTO site_config (id, promo_text, promo_active, schedule_text) VALUES (1, '', 0, '')`).run();
 }
 
 module.exports = db;

@@ -41,22 +41,45 @@
                 <input type="text" id="title-input" placeholder="Nombre del set o track" required>
               </div>
               <div class="field">
-                <label for="genre-input">Género (opcional)</label>
+                <label for="genre-input">Género / etiqueta</label>
                 <input type="text" id="genre-input" placeholder="House, Reggaetón, Techno…">
               </div>
               <div class="field">
                 <label for="description-input">Descripción (opcional)</label>
                 <textarea id="description-input" rows="3" placeholder="Notas sobre el set…"></textarea>
               </div>
+
               <div class="field checkbox-field">
                 <label class="checkbox-label">
-                  <input type="checkbox" id="for-sale-input">
-                  <span>Poner esta pista a la venta</span>
+                  <input type="checkbox" id="is-playlist-input">
+                  <span>Es una colaboración gratuita (va a Playlist, no al Catálogo de venta)</span>
                 </label>
               </div>
-              <div class="field">
-                <label for="price-input">Precio (opcional)</label>
-                <input type="text" id="price-input" placeholder="Ej: 500 CUP, 5 USD, 300 MLC">
+
+              <div id="playlist-only-fields" style="display:none;">
+                <div class="field">
+                  <label for="artist-credit-input">Artista(s) colaborador(es)</label>
+                  <input type="text" id="artist-credit-input" placeholder="Ej: Feat. Nombre del Artista">
+                </div>
+              </div>
+
+              <div id="catalog-only-fields">
+                <div class="field checkbox-field">
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="for-sale-input">
+                    <span>Poner esta pista a la venta</span>
+                  </label>
+                </div>
+                <div class="field checkbox-field">
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="is-exclusive-input">
+                    <span>Exclusiva (compra única — al aprobarse la venta, desaparece del catálogo y pasa a Beats VIP)</span>
+                  </label>
+                </div>
+                <div class="field">
+                  <label for="price-input">Precio en CUP</label>
+                  <input type="text" id="price-input" placeholder="Ej: 500">
+                </div>
               </div>
             </div>
             <div>
@@ -87,11 +110,44 @@
       </div>
 
       <div class="panel">
+        <h2>Promociones y horario</h2>
+        <p class="panel-hint">Se muestran arriba de todo en la página pública.</p>
+        <form id="site-config-form">
+          <div class="field checkbox-field">
+            <label class="checkbox-label">
+              <input type="checkbox" id="promo-active-input">
+              <span>Mostrar banner de promoción</span>
+            </label>
+          </div>
+          <div class="field">
+            <label for="promo-text-input">Texto de la promoción</label>
+            <input type="text" id="promo-text-input" placeholder="Ej: 20% de descuento en beats exclusivos esta semana">
+          </div>
+          <div class="field">
+            <label for="schedule-text-input">Horario de atención</label>
+            <input type="text" id="schedule-text-input" placeholder="Ej: Lun-Sáb 9am-8pm">
+          </div>
+          <button type="submit" class="btn-primary">Guardar</button>
+        </form>
+      </div>
+
+      <div class="panel">
+        <h2>Tasas de cambio</h2>
+        <p class="panel-hint">
+          El precio de cada pista se define en CUP. Aquí defines cuántos CUP equivalen a 1 unidad de cada moneda, para que el público pueda ver el precio convertido y pagar en la moneda que prefiera. Déjala en 0 para ocultar esa moneda del selector público hasta que tengas la tasa real.
+        </p>
+        <form id="exchange-rates-form">
+          <div id="exchange-rates-list"></div>
+          <button type="submit" class="btn-primary" style="margin-top:16px;">Guardar tasas</button>
+        </form>
+      </div>
+
+      <div class="panel">
         <div class="panel-header-row">
           <h2>Comprobantes de compra</h2>
           <span class="badge-count" id="orders-count"></span>
         </div>
-        <p class="panel-hint">Cuando alguien compra una pista, su comprobante aparece aquí con su nombre y teléfono. Elimínalo cuando ya lo hayas revisado y contactado al comprador, para no acumular espacio.</p>
+        <p class="panel-hint">Cuando alguien compra una pista, su comprobante aparece aquí con su nombre y teléfono. Aprueba el pedido cuando confirmes el pago (si la pista era exclusiva, se marca vendida y pasa a Beats VIP). Elimina el comprobante cuando ya lo hayas procesado, para no acumular espacio.</p>
         <div id="orders-list"></div>
       </div>
 
@@ -136,7 +192,14 @@
       </div>
 
       <div class="panel">
-        <h2>Tu catálogo</h2>
+        <div class="panel-header-row">
+          <h2>Tu música</h2>
+        </div>
+        <div class="admin-tabs">
+          <button type="button" class="admin-tab active" data-list-section="catalog">Catálogo</button>
+          <button type="button" class="admin-tab" data-list-section="playlist">Playlist</button>
+          <button type="button" class="admin-tab" data-list-section="vip">Beats VIP</button>
+        </div>
         <div id="track-list"></div>
       </div>
 

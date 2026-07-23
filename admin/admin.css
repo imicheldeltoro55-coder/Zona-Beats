@@ -34,7 +34,7 @@ input, textarea {
   color: var(--text);
   border-radius: 7px;
   padding: 10px 12px;
-  font-size: 14px;
+  font-size: 16px;
   width: 100%;
 }
 input:focus, textarea:focus {
@@ -98,6 +98,20 @@ label {
 }
 @media (max-width: 600px) {
   .account-row { grid-template-columns: 1fr; }
+
+  /* Fila de cada pista en 'Tu música': el bloque info (portada+título) ocupa el ancho
+     completo, y los controles de precio/eliminar bajan a su propia línea debajo,
+     en vez de competir por espacio horizontal contra un título largo. */
+  .track-list-item {
+    align-items: flex-start;
+  }
+  .track-list-item .info {
+    flex-basis: 100%;
+  }
+  .track-list-item .price-edit {
+    flex-basis: 100%;
+    padding-top: 4px;
+  }
 }
 
 .account-remove-btn {
@@ -111,6 +125,56 @@ label {
   flex-shrink: 0;
 }
 .account-remove-btn:hover { border-color: var(--danger); color: var(--danger); }
+
+/* Fila de cuenta de cobro con selector de moneda (4 columnas) */
+.account-row.with-currency {
+  grid-template-columns: 130px 1fr 1fr auto;
+}
+@media (max-width: 700px) {
+  .account-row.with-currency { grid-template-columns: 1fr; }
+}
+
+.account-row select {
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 10px 8px;
+  font-size: 13px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Fila de tasa de cambio: nombre de moneda fijo + input numérico */
+.rate-row {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 10px;
+  margin-bottom: 10px;
+  align-items: center;
+}
+@media (max-width: 500px) {
+  .rate-row { grid-template-columns: 1fr; }
+}
+
+.rate-row-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.rate-row-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rate-row-input-wrap span {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+}
 
 /* ---------- Login ---------- */
 .login-screen {
@@ -280,6 +344,32 @@ label {
   color: var(--text-faint);
 }
 
+/* ---------- Tabs internos (catálogo / playlist / vip en "Tu música") ---------- */
+.admin-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 16px;
+}
+
+.admin-tab {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 10px 14px;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.admin-tab:hover { color: var(--text-dim); }
+
+.admin-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
 .watermark-actions {
   display: flex;
   gap: 10px;
@@ -346,6 +436,21 @@ label {
 }
 .btn-whatsapp-order:hover { filter: brightness(1.08); }
 
+.btn-approve-order {
+  background: var(--accent);
+  color: #0c0a12;
+  font-weight: 700;
+  padding: 7px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.btn-approve-order:hover { background: #ff5c92; }
+
+.order-approved-tag {
+  color: var(--live);
+  font-weight: 700;
+}
+
 /* ---------- Modal de vista ampliada del comprobante ---------- */
 .receipt-modal-overlay {
   position: fixed;
@@ -384,16 +489,31 @@ label {
   justify-content: center;
 }
 
+.vip-sold-tag {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  background: rgba(255, 61, 127, 0.1);
+  border: 1px solid rgba(255, 61, 127, 0.3);
+  padding: 6px 12px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
 .track-list-item .price-edit {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-shrink: 0;
+  flex-wrap: wrap;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .track-list-item .price-edit input[type="text"] {
-  width: 130px;
+  width: 100px;
+  min-width: 0;
   padding: 7px 9px;
-  font-size: 12px;
+  font-size: 16px;
 }
 .track-list-item .price-edit label.checkbox-label {
   font-size: 11px;

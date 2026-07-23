@@ -202,19 +202,58 @@ function matchRoute(method, pathname) {
 }
 
 // --- API pública: listar tracks ---
-route('GET', '/api/tracks', (req, res) => {
-  const tracks = db.prepare(`
-    SELECT id, title, genre, description, cover_filename, duration_seconds, plays,
-           price_label, for_sale, created_at
-    FROM tracks ORDER BY created_at DESC
-  `).all();
-  sendJSON(res, 200, { tracks });
+// --- API pública: listar tracks. ?type=catalog (default) | playlist | vip ---
+route('GET', '/api/tracks', (req, res, params, query) => {
+  const type = query.get('type') || 'catalog';
+  let rows;
+
+  if (type === 'playlist') {
+    // Playlist: música gratuita, nunca aparece mezclada con el catálogo de venta.
+    rows = db.prepare(`
+      SELECT id, title, genre, description, artist_credit, cover_filename, duration_seconds, plays, created_at
+      FROM tracks WHERE is_playlist = 1 ORDER BY created_at DESC
+    `).all();
+  } else if (type === 'vip') {
+    // Beats VIP: pistas exclusivas que ya se vendieron (compra única, ya no disponibles para nadie más).
+    rows = db.prepare(`
+      SELECT id, title, genre, description, cover_filename, duration_seconds, plays,
+             price_label, price_cup, for_sale, is_exclusive, sold, created_at
+      FROM tracks WHERE is_playlist = 0 AND is_exclusive = 1 AND sold = 1 ORDER BY created_at DESC
+    `).all();
+  } else {
+    // Catálogo: todo lo que está a la venta y aún no se vendió (si es exclusiva).
+    rows = db.prepare(`
+      SELECT id, title, genre, description, cover_filename, duration_seconds, plays,
+             price_label, price_cup, for_sale, is_exclusive, sold, created_at
+      FROM tracks WHERE is_playlist = 0 AND sold = 0 ORDER BY created_at DESC
+    `).all();
+  }
+
+  sendJSON(res, 200, { tracks: rows });
 });
 
 // --- API pública: obtener perfil del artista ---
 route('GET', '/api/profile', (req, res) => {
   const profile = db.prepare('SELECT artist_name, bio, avatar_filename FROM profile WHERE id = 1').get();
   sendJSON(res, 200, { profile });
+});
+
+// --- API pública: configuración del sitio (promoción y horario de atención) ---
+route('GET', '/api/site-config', (req, res) => {
+  const config = db.prepare('SELECT promo_text, promo_active, schedule_text FROM site_config WHERE id = 1').get();
+  sendJSON(res, 200, {
+    promoText: config.promo_text || '',
+    promoActive: Boolean(config.promo_active),
+    scheduleText: config.schedule_text || '',
+  });
+});
+
+// --- API pública: tasas de cambio (para que el usuario vea el precio en su moneda preferida) ---
+route('GET', '/api/exchange-rates', (req, res) => {
+  const row = db.prepare('SELECT rates_json FROM exchange_rates WHERE id = 1').get();
+  let rates = [];
+  try { rates = JSON.parse(row.rates_json || '[]'); } catch { rates = []; }
+  sendJSON(res, 200, { rates });
 });
 
 // --- API pública: datos de cobro para comprar una pista (cuentas + teléfono de contacto) ---
@@ -257,13 +296,21 @@ route('POST', '/api/orders', async (req, res) => {
   const trackId = Number(fields.trackId);
   const buyerName = (fields.buyerName || '').trim().slice(0, 100);
   const buyerPhone = (fields.buyerPhone || '').trim().slice(0, 40);
+  const currency = (fields.currency || 'CUP').trim().slice(0, 20);
+  const displayedPrice = (fields.displayedPrice || '').trim().slice(0, 60);
 
   if (!trackId || !buyerName || !buyerPhone || !receiptPart) {
     return sendJSON(res, 400, { error: 'Faltan datos: nombre, teléfono o comprobante' });
   }
 
-  const track = db.prepare('SELECT id, title, price_label FROM tracks WHERE id = ?').get(trackId);
+  const track = db.prepare('SELECT id, title, price_label, is_exclusive, sold FROM tracks WHERE id = ?').get(trackId);
   if (!track) return sendJSON(res, 404, { error: 'Pista no encontrada' });
+
+  // Una pista exclusiva que ya se vendió no puede comprarse de nuevo — se resguarda
+  // aquí además de en el frontend, por si dos personas intentan comprarla casi a la vez.
+  if (track.is_exclusive && track.sold) {
+    return sendJSON(res, 409, { error: 'Esta pista exclusiva ya fue comprada por otra persona' });
+  }
 
   const receiptExt = safeExt(receiptPart.filename, '.jpg');
   if (!ALLOWED_IMAGE_EXT.includes(receiptExt)) {
@@ -277,9 +324,9 @@ route('POST', '/api/orders', async (req, res) => {
   fs.writeFileSync(path.join(UPLOADS_RECEIPTS, receiptFilename), receiptPart.data);
 
   db.prepare(`
-    INSERT INTO orders (track_id, track_title, price_label, buyer_name, buyer_phone, receipt_filename)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(track.id, track.title, track.price_label || '', buyerName, buyerPhone, receiptFilename);
+    INSERT INTO orders (track_id, track_title, price_label, currency, buyer_name, buyer_phone, receipt_filename)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(track.id, track.title, displayedPrice || track.price_label || '', currency, buyerName, buyerPhone, receiptFilename);
 
   sendJSON(res, 201, { ok: true });
 });
@@ -291,6 +338,31 @@ route('POST', '/api/tracks/:id/token', (req, res, params) => {
   const token = issueStreamToken(track.id);
   db.prepare('UPDATE tracks SET plays = plays + 1 WHERE id = ?').run(track.id);
   sendJSON(res, 200, { token, expiresInSeconds: 1800 });
+});
+
+// --- Descarga real, solo permitida para pistas de Playlist (las gratuitas) ---
+route('GET', '/api/download/:id', (req, res, params) => {
+  const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(params.id);
+  if (!track) return sendJSON(res, 404, { error: 'Pista no encontrada' });
+
+  // Verificación en el servidor, no solo en el frontend: una pista del Catálogo de venta
+  // nunca se puede descargar por esta vía aunque alguien arme la URL a mano.
+  if (!track.is_playlist) {
+    return sendJSON(res, 403, { error: 'Esta pista no está disponible para descarga' });
+  }
+
+  const filePath = path.join(UPLOADS_AUDIO, track.audio_filename);
+  if (!fs.existsSync(filePath)) return sendJSON(res, 404, { error: 'Archivo no encontrado' });
+
+  const ext = path.extname(track.audio_filename).toLowerCase();
+  const safeName = track.title.replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'pista';
+
+  res.writeHead(200, {
+    'Content-Type': contentTypeForAudio(ext),
+    'Content-Disposition': `attachment; filename="${safeName}${ext}"`,
+    'Content-Length': fs.statSync(filePath).size,
+  });
+  fs.createReadStream(filePath).pipe(res);
 });
 
 // --- Streaming de audio con soporte de Range (chunks), requiere token válido ---
@@ -466,35 +538,60 @@ route('POST', '/api/admin/tracks', async (req, res) => {
     }
   }
 
-  const priceLabel = (fields.priceLabel || '').trim();
-  const forSale = fields.forSale === '1' || fields.forSale === 'true' ? 1 : 0;
+  const isPlaylist = fields.isPlaylist === '1' || fields.isPlaylist === 'true' ? 1 : 0;
+  const isExclusive = !isPlaylist && (fields.isExclusive === '1' || fields.isExclusive === 'true') ? 1 : 0;
+  const forSale = !isPlaylist && (fields.forSale === '1' || fields.forSale === 'true') ? 1 : 0;
+  const artistCredit = (fields.artistCredit || '').trim();
+
+  // El precio se define en CUP (moneda base). priceCup es el número puro para poder
+  // convertir a otras monedas; priceLabel es lo que se muestra si no hay conversión.
+  const priceCup = isPlaylist ? 0 : Math.max(0, parseFloat(fields.priceCup) || 0);
+  const priceLabel = isPlaylist ? '' : (priceCup > 0 ? `${priceCup} CUP` : (fields.priceLabel || '').trim());
 
   const result = db.prepare(`
-    INSERT INTO tracks (title, genre, description, audio_filename, cover_filename, price_label, for_sale)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(fields.title, fields.genre || '', fields.description || '', savedAudioFilename, coverFilename, priceLabel, forSale);
+    INSERT INTO tracks (title, genre, description, artist_credit, audio_filename, cover_filename,
+                         price_label, price_cup, for_sale, is_playlist, is_exclusive)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    fields.title, fields.genre || '', fields.description || '', artistCredit,
+    savedAudioFilename, coverFilename, priceLabel, priceCup, forSale, isPlaylist, isExclusive
+  );
 
   sendJSON(res, 201, { id: Number(result.lastInsertRowid) });
 });
 
 // Listar tracks para admin (igual que público, pero requiere sesión)
-route('GET', '/api/admin/tracks', (req, res) => {
+route('GET', '/api/admin/tracks', (req, res, params, query) => {
   if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
-  const tracks = db.prepare('SELECT * FROM tracks ORDER BY created_at DESC').all();
+  const type = query.get('type') || 'catalog';
+
+  let tracks;
+  if (type === 'playlist') {
+    tracks = db.prepare('SELECT * FROM tracks WHERE is_playlist = 1 ORDER BY created_at DESC').all();
+  } else if (type === 'vip') {
+    tracks = db.prepare('SELECT * FROM tracks WHERE is_playlist = 0 AND is_exclusive = 1 AND sold = 1 ORDER BY created_at DESC').all();
+  } else {
+    tracks = db.prepare('SELECT * FROM tracks WHERE is_playlist = 0 ORDER BY created_at DESC').all();
+  }
+
   sendJSON(res, 200, { tracks });
 });
 
-// Actualizar precio / disponibilidad de venta de una pista
+// Actualizar precio / disponibilidad de venta / exclusividad de una pista
 route('POST', '/api/admin/tracks/:id/price', async (req, res, params) => {
   if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
-  const track = db.prepare('SELECT id FROM tracks WHERE id = ?').get(params.id);
+  const track = db.prepare('SELECT id, is_playlist FROM tracks WHERE id = ?').get(params.id);
   if (!track) return sendJSON(res, 404, { error: 'No encontrada' });
+  if (track.is_playlist) return sendJSON(res, 400, { error: 'Las pistas de Playlist no tienen precio' });
 
   try {
     const body = await readBody(req, 1024 * 5);
-    const { priceLabel, forSale } = JSON.parse(body.toString('utf8'));
-    db.prepare('UPDATE tracks SET price_label = ?, for_sale = ? WHERE id = ?')
-      .run((priceLabel || '').trim(), forSale ? 1 : 0, params.id);
+    const { priceCup, forSale, isExclusive } = JSON.parse(body.toString('utf8'));
+    const cleanPriceCup = Math.max(0, parseFloat(priceCup) || 0);
+    const priceLabel = cleanPriceCup > 0 ? `${cleanPriceCup} CUP` : '';
+
+    db.prepare('UPDATE tracks SET price_label = ?, price_cup = ?, for_sale = ?, is_exclusive = ? WHERE id = ?')
+      .run(priceLabel, cleanPriceCup, forSale ? 1 : 0, isExclusive ? 1 : 0, params.id);
     sendJSON(res, 200, { ok: true });
   } catch {
     sendJSON(res, 400, { error: 'Solicitud inválida' });
@@ -566,7 +663,7 @@ route('GET', '/api/admin/payment-info', (req, res) => {
   sendJSON(res, 200, { contactPhone: info.contact_phone || '', accounts });
 });
 
-// Actualizar datos de cobro: teléfono de contacto + lista de cuentas (banco + número)
+// Actualizar datos de cobro: teléfono de contacto + lista de cuentas (moneda + banco + número)
 route('POST', '/api/admin/payment-info', async (req, res) => {
   if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
   try {
@@ -579,8 +676,9 @@ route('POST', '/api/admin/payment-info', async (req, res) => {
     const cleanAccounts = accounts
       .filter(a => a && (a.bank || a.number))
       .map(a => ({
+        currency: String(a.currency || 'CUP').slice(0, 20).trim(),
         bank: String(a.bank || '').slice(0, 60).trim(),
-        number: String(a.number || '').slice(0, 40).trim(),
+        number: String(a.number || '').slice(0, 60).trim(),
       }));
 
     db.prepare('UPDATE payment_info SET contact_phone = ?, accounts_json = ? WHERE id = 1')
@@ -634,6 +732,63 @@ route('POST', '/api/admin/social-links', async (req, res) => {
   }
 });
 
+// ---------- Tasas de cambio ----------
+
+// Obtener tasas actuales (vista admin)
+route('GET', '/api/admin/exchange-rates', (req, res) => {
+  if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
+  const row = db.prepare('SELECT rates_json FROM exchange_rates WHERE id = 1').get();
+  let rates = [];
+  try { rates = JSON.parse(row.rates_json || '[]'); } catch { rates = []; }
+  sendJSON(res, 200, { rates });
+});
+
+// Actualizar tasas de cambio. CUP siempre queda fija en 1 (es la moneda base).
+route('POST', '/api/admin/exchange-rates', async (req, res) => {
+  if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
+  try {
+    const body = await readBody(req, 1024 * 10);
+    const { rates } = JSON.parse(body.toString('utf8'));
+    if (!Array.isArray(rates)) return sendJSON(res, 400, { error: 'Formato de tasas inválido' });
+
+    const cleanRates = rates.map(r => ({
+      code: String(r.code || '').slice(0, 30).trim(),
+      label: String(r.label || '').slice(0, 40).trim(),
+      cupPerUnit: r.code === 'CUP' ? 1 : Math.max(0, parseFloat(r.cupPerUnit) || 0),
+    })).filter(r => r.code);
+
+    db.prepare('UPDATE exchange_rates SET rates_json = ? WHERE id = 1').run(JSON.stringify(cleanRates));
+    sendJSON(res, 200, { ok: true });
+  } catch {
+    sendJSON(res, 400, { error: 'Solicitud inválida' });
+  }
+});
+
+// ---------- Configuración del sitio (promociones + horario) ----------
+
+route('GET', '/api/admin/site-config', (req, res) => {
+  if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
+  const config = db.prepare('SELECT promo_text, promo_active, schedule_text FROM site_config WHERE id = 1').get();
+  sendJSON(res, 200, {
+    promoText: config.promo_text || '',
+    promoActive: Boolean(config.promo_active),
+    scheduleText: config.schedule_text || '',
+  });
+});
+
+route('POST', '/api/admin/site-config', async (req, res) => {
+  if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
+  try {
+    const body = await readBody(req, 1024 * 10);
+    const { promoText, promoActive, scheduleText } = JSON.parse(body.toString('utf8'));
+    db.prepare('UPDATE site_config SET promo_text = ?, promo_active = ?, schedule_text = ? WHERE id = 1')
+      .run(String(promoText || '').slice(0, 300).trim(), promoActive ? 1 : 0, String(scheduleText || '').slice(0, 300).trim());
+    sendJSON(res, 200, { ok: true });
+  } catch {
+    sendJSON(res, 400, { error: 'Solicitud inválida' });
+  }
+});
+
 // ---------- Pedidos (comprobantes de compra) ----------
 
 // Listar pedidos pendientes de revisión
@@ -651,6 +806,22 @@ route('GET', '/api/admin/orders/:id/receipt', (req, res, params) => {
   const filePath = path.join(UPLOADS_RECEIPTS, order.receipt_filename);
   const ext = path.extname(order.receipt_filename).toLowerCase();
   sendFile(res, filePath, contentTypeForImage(ext));
+});
+
+// Aprobar un pedido: si la pista es exclusiva, se marca como vendida y desaparece
+// del catálogo público para todos los demás — pasa a verse solo en "Beats VIP".
+route('POST', '/api/admin/orders/:id/approve', (req, res, params) => {
+  if (!isAdminAuthed(req)) return sendJSON(res, 401, { error: 'No autorizado' });
+  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(params.id);
+  if (!order) return sendJSON(res, 404, { error: 'Pedido no encontrado' });
+
+  const track = db.prepare('SELECT id, is_exclusive, sold FROM tracks WHERE id = ?').get(order.track_id);
+  if (track && track.is_exclusive && !track.sold) {
+    db.prepare('UPDATE tracks SET sold = 1 WHERE id = ?').run(track.id);
+  }
+
+  db.prepare("UPDATE orders SET status = 'approved' WHERE id = ?").run(params.id);
+  sendJSON(res, 200, { ok: true, trackMarkedSold: Boolean(track && track.is_exclusive) });
 });
 
 // Eliminar un pedido ya revisado (borra también el archivo del comprobante del disco)

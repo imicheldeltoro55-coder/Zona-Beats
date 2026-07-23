@@ -3,7 +3,6 @@
   const playerBar = document.getElementById('player-bar');
   const playerCover = document.getElementById('player-cover');
   const playerTitle = document.getElementById('player-title');
-  const playerGenre = document.getElementById('player-genre');
   const playBtn = document.getElementById('player-play-btn');
   const iconPlay = document.getElementById('icon-play');
   const iconPause = document.getElementById('icon-pause');
@@ -13,10 +12,20 @@
   const timeTotal = document.getElementById('time-total');
   const trackGrid = document.getElementById('track-grid');
   const emptyState = document.getElementById('empty-state');
+  const emptyStateTitle = document.getElementById('empty-state-title');
+  const emptyStateText = document.getElementById('empty-state-text');
+  const noResultsState = document.getElementById('no-results-state');
   const trackCount = document.getElementById('track-count');
+  const sectionTitle = document.getElementById('section-title');
+  const searchInput = document.getElementById('search-input');
+  const currencySelect = document.getElementById('currency-select');
+  const paymentMethodsRail = document.getElementById('payment-methods-rail');
+  const paymentMethodsList = document.getElementById('payment-methods-list');
+  const catalogLayout = document.querySelector('.catalog-layout');
 
   const buyBtn = document.getElementById('player-buy-btn');
   const buyPriceLabel = document.getElementById('player-buy-price');
+  const downloadBtn = document.getElementById('player-download-btn');
   const modalOverlay = document.getElementById('buy-modal-overlay');
   const modalClose = document.getElementById('modal-close-btn');
   const modalTrackTitle = document.getElementById('modal-track-title');
@@ -29,11 +38,14 @@
   const receiptPreview = document.getElementById('receipt-preview');
 
   let currentTrackId = null;
-  let tracksData = [];
+  let currentSection = 'catalog'; // catalog | playlist | vip
+  let tracksBySection = { catalog: [], playlist: [], vip: [] };
   let paymentInfo = { contactPhone: '', accounts: [] };
+  let exchangeRates = [];
+  let selectedCurrency = 'CUP';
   let activeModalTrack = null;
+  let searchQuery = '';
 
-  // Bloquear atajos comunes de descarga/guardado/inspección (disuasión básica, no infalible)
   document.addEventListener('keydown', (e) => {
     const k = e.key.toLowerCase();
     if (
@@ -52,6 +64,12 @@
     return `${m}:${s}`;
   }
 
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str || '';
+    return div.innerHTML;
+  }
+
   async function loadProfile() {
     const res = await fetch('/api/profile');
     const { profile } = await res.json();
@@ -65,8 +83,31 @@
     }
   }
 
-  // Íconos SVG inline (sin dependencias externas). 'generic' cubre cualquier red
-  // futura que no reconozcamos por el dominio de su URL.
+  async function loadSiteConfig() {
+    try {
+      const res = await fetch('/api/site-config');
+      const config = await res.json();
+
+      const promoBanner = document.getElementById('promo-banner');
+      if (config.promoActive && config.promoText) {
+        document.getElementById('promo-banner-text').textContent = config.promoText;
+        promoBanner.style.display = 'flex';
+      } else {
+        promoBanner.style.display = 'none';
+      }
+
+      const scheduleWrap = document.getElementById('hero-schedule');
+      if (config.scheduleText) {
+        document.getElementById('hero-schedule-text').textContent = config.scheduleText;
+        scheduleWrap.style.display = 'flex';
+      } else {
+        scheduleWrap.style.display = 'none';
+      }
+    } catch {
+      /* si falla, simplemente no se muestran */
+    }
+  }
+
   const SOCIAL_ICONS = {
     spotify: '<svg viewBox="0 0 24 24"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141 4.32-1.32 9.66-.66 13.32 1.621.361.181.54.78.421 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.18-1.2-.181-1.38-.721-.18-.6.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>',
     facebook: '<svg viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>',
@@ -108,11 +149,55 @@
     }
   }
 
-  async function loadTracks() {
-    const res = await fetch('/api/tracks');
-    const { tracks } = await res.json();
-    tracksData = tracks;
-    renderTracks(tracks);
+  async function loadExchangeRates() {
+    try {
+      const res = await fetch('/api/exchange-rates');
+      const { rates } = await res.json();
+      exchangeRates = rates;
+      renderCurrencyOptions();
+    } catch {
+      exchangeRates = [{ code: 'CUP', label: 'CUP', cupPerUnit: 1 }];
+      renderCurrencyOptions();
+    }
+  }
+
+  function renderCurrencyOptions() {
+    const usable = exchangeRates.filter(r => r.code === 'CUP' || r.cupPerUnit > 0);
+    currencySelect.innerHTML = usable.map(r => `<option value="${escapeHtml(r.code)}">${escapeHtml(r.label)}</option>`).join('');
+    if (usable.some(r => r.code === selectedCurrency)) {
+      currencySelect.value = selectedCurrency;
+    } else {
+      selectedCurrency = 'CUP';
+      currencySelect.value = 'CUP';
+    }
+    renderPaymentMethodsRail();
+  }
+
+  function convertFromCup(priceCup, currencyCode) {
+    const rate = exchangeRates.find(r => r.code === currencyCode);
+    if (!rate || !rate.cupPerUnit) return null;
+    if (currencyCode === 'CUP') return priceCup;
+    return priceCup / rate.cupPerUnit;
+  }
+
+  function formatPriceInCurrency(priceCup, currencyCode) {
+    const rate = exchangeRates.find(r => r.code === currencyCode);
+    const converted = convertFromCup(priceCup, currencyCode);
+    if (converted == null) return `${priceCup} CUP`;
+    const decimals = currencyCode === 'CUP' ? 0 : 2;
+    const formatted = converted.toLocaleString('es', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    return `${formatted} ${rate.label}`;
+  }
+
+  currencySelect.addEventListener('change', () => {
+    selectedCurrency = currencySelect.value;
+    renderPaymentMethodsRail();
+    renderCurrentSection();
+  });
+
+  function renderPaymentMethodsRail() {
+    const usable = exchangeRates.filter(r => r.code === 'CUP' || r.cupPerUnit > 0);
+    paymentMethodsList.innerHTML = usable.map(r => `<div class="payment-method-chip">${escapeHtml(r.label)}</div>`).join('');
   }
 
   async function loadPaymentInfo() {
@@ -121,10 +206,77 @@
     paymentInfo = await res.json();
   }
 
-  function renderTracks(tracks) {
+  document.querySelectorAll('.section-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const section = tab.dataset.section;
+      if (section === currentSection) return;
+      currentSection = section;
+
+      document.querySelectorAll('.section-tab').forEach(t => t.classList.toggle('active', t === tab));
+
+      const titles = { catalog: 'Catálogo', playlist: 'Playlist', vip: 'Beats VIP' };
+      sectionTitle.textContent = titles[section];
+
+      catalogLayout.classList.toggle('no-sidebar', section === 'playlist');
+      paymentMethodsRail.style.display = section === 'playlist' ? 'none' : 'block';
+
+      searchInput.placeholder = section === 'playlist'
+        ? 'Buscar por nombre o género…'
+        : 'Buscar por nombre, género o precio…';
+
+      renderCurrentSection();
+      if (!tracksBySection[section].length) loadTracksForSection(section);
+    });
+  });
+
+  async function loadTracksForSection(section) {
+    const res = await fetch(`/api/tracks?type=${section}`);
+    const { tracks } = await res.json();
+    tracksBySection[section] = tracks;
+    renderCurrentSection();
+  }
+
+  let searchDebounceTimer = null;
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      searchQuery = searchInput.value.trim().toLowerCase();
+      renderCurrentSection();
+    }, 200);
+  });
+
+  function matchesSearch(track) {
+    if (!searchQuery) return true;
+    const haystacks = [track.title, track.genre, track.artist_credit, track.price_label]
+      .filter(Boolean)
+      .map(s => s.toLowerCase());
+    return haystacks.some(h => h.includes(searchQuery));
+  }
+
+  function renderCurrentSection() {
+    const allTracks = tracksBySection[currentSection] || [];
+    const filtered = allTracks.filter(matchesSearch);
+    renderTracks(filtered, allTracks.length);
+  }
+
+  function renderTracks(tracks, totalBeforeFilter) {
     trackGrid.innerHTML = '';
     trackCount.textContent = tracks.length ? `${tracks.length} PISTA${tracks.length === 1 ? '' : 'S'}` : '';
-    emptyState.style.display = tracks.length ? 'none' : 'block';
+
+    const hasSearch = Boolean(searchQuery);
+    emptyState.style.display = (!totalBeforeFilter && !hasSearch) ? 'block' : 'none';
+    noResultsState.style.display = (totalBeforeFilter > 0 && tracks.length === 0) ? 'block' : 'none';
+
+    if (currentSection === 'vip') {
+      emptyStateTitle.textContent = 'Aún no hay Beats VIP';
+      emptyStateText.textContent = 'Cuando se vendan pistas exclusivas, aparecerán aquí.';
+    } else if (currentSection === 'playlist') {
+      emptyStateTitle.textContent = 'Playlist vacía';
+      emptyStateText.textContent = 'Todavía no hay colaboraciones gratuitas publicadas.';
+    } else {
+      emptyStateTitle.textContent = 'Aún no hay pistas';
+      emptyStateText.textContent = 'Está preparando el primer set. Vuelve pronto.';
+    }
 
     tracks.forEach((track) => {
       const card = document.createElement('button');
@@ -136,30 +288,39 @@
         ? `<img src="/api/cover/${track.id}" alt="" oncontextmenu="return false;">`
         : `<div class="track-cover-fallback">${(track.title || '?').charAt(0).toUpperCase()}</div>`;
 
+      const genreBadge = track.genre
+        ? `<div class="track-genre-badge${track.is_exclusive ? ' exclusive' : ''}">${escapeHtml(track.genre)}</div>`
+        : '';
+
+      let priceChip = '';
+      if (currentSection !== 'playlist' && track.for_sale && track.price_cup > 0) {
+        const priceText = formatPriceInCurrency(track.price_cup, selectedCurrency);
+        priceChip = `
+          <div class="track-price-chip">
+            <svg viewBox="0 0 24 24"><path d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96 0 1.1.9 2 2 2h12v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12L8.1 13h7.45c.75 0 1.41-.41 1.75-1.03L20.9 4H4.21l-.94-2H1zm16 16c-1.1 0-1.99.9-1.99 2s.89 2 1.99 2 2-.9 2-2-.9-2-2-2z"/></svg>
+            <span title="${escapeHtml(priceText)}">${escapeHtml(priceText)}</span>
+          </div>
+        `;
+      }
+
       card.innerHTML = `
         <div class="track-cover-wrap">
           ${coverHtml}
+          ${genreBadge}
           <div class="play-overlay">
             <div class="play-btn-circle">
               <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
             </div>
           </div>
         </div>
-        <div class="track-title">${escapeHtml(track.title)}</div>
-        <div class="track-meta">
-          <span>${escapeHtml(track.genre || 'Set')}</span>
+        <div class="track-info-row">
+          <div class="track-title">${escapeHtml(track.title)}</div>
+          ${priceChip}
         </div>
-        ${track.for_sale && track.price_label ? `<div class="track-price-tag">${escapeHtml(track.price_label)}</div>` : ''}
       `;
       card.addEventListener('click', () => playTrack(track));
       trackGrid.appendChild(card);
     });
-  }
-
-  function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str || '';
-    return div.innerHTML;
   }
 
   function markPlayingCard(trackId) {
@@ -170,8 +331,6 @@
 
   async function playTrack(track) {
     try {
-      // Pide un token temporal de streaming justo antes de reproducir.
-      // El audio nunca se sirve sin este token, y expira solo.
       const res = await fetch(`/api/tracks/${track.id}/token`, { method: 'POST' });
       if (!res.ok) throw new Error('No se pudo obtener acceso a la pista');
       const { token } = await res.json();
@@ -181,18 +340,27 @@
       audioEl.play();
 
       playerTitle.textContent = track.title;
-      playerGenre.textContent = track.genre || 'Set';
       playerCover.src = track.cover_filename ? `/api/cover/${track.id}` : '';
       playerBar.classList.add('active');
       markPlayingCard(track.id);
 
-      if (track.for_sale && track.price_label) {
-        buyPriceLabel.textContent = track.price_label;
+      if (currentSection === 'playlist') {
+        buyBtn.style.display = 'none';
+        buyBtn.onclick = null;
+        downloadBtn.style.display = 'inline-flex';
+        downloadBtn.onclick = () => { window.location.href = `/api/download/${track.id}`; };
+      } else if (track.for_sale && track.price_cup > 0) {
+        buyPriceLabel.textContent = formatPriceInCurrency(track.price_cup, selectedCurrency);
+        buyPriceLabel.title = buyPriceLabel.textContent;
         buyBtn.style.display = 'inline-flex';
         buyBtn.onclick = () => openBuyModal(track);
+        downloadBtn.style.display = 'none';
+        downloadBtn.onclick = null;
       } else {
         buyBtn.style.display = 'none';
         buyBtn.onclick = null;
+        downloadBtn.style.display = 'none';
+        downloadBtn.onclick = null;
       }
     } catch (err) {
       console.error(err);
@@ -226,10 +394,10 @@
 
   audioEl.addEventListener('ended', () => {
     markPlayingCard(null);
-    // Reproduce la siguiente pista de la lista, si existe
-    const idx = tracksData.findIndex(t => t.id === currentTrackId);
-    if (idx !== -1 && idx < tracksData.length - 1) {
-      playTrack(tracksData[idx + 1]);
+    const list = tracksBySection[currentSection] || [];
+    const idx = list.findIndex(t => t.id === currentTrackId);
+    if (idx !== -1 && idx < list.length - 1) {
+      playTrack(list[idx + 1]);
     }
   });
 
@@ -240,10 +408,10 @@
     audioEl.currentTime = pct * audioEl.duration;
   });
 
-  // Si el token expira a mitad de reproducción (sets muy largos), renovar automáticamente.
   audioEl.addEventListener('error', async () => {
     if (currentTrackId == null) return;
-    const track = tracksData.find(t => t.id === currentTrackId);
+    const list = tracksBySection[currentSection] || [];
+    const track = list.find(t => t.id === currentTrackId);
     if (!track) return;
     const wasTime = audioEl.currentTime;
     const res = await fetch(`/api/tracks/${track.id}/token`, { method: 'POST' });
@@ -254,7 +422,6 @@
     audioEl.play();
   });
 
-  // ---------- Modal de compra ----------
   const orderForm = document.getElementById('order-form');
   const buyerNameInput = document.getElementById('buyer-name-input');
   const buyerPhoneInput = document.getElementById('buyer-phone-input');
@@ -266,13 +433,15 @@
   function openBuyModal(track) {
     activeModalTrack = track;
     modalTrackTitle.textContent = track.title;
-    modalPrice.textContent = track.price_label;
+    modalPrice.textContent = formatPriceInCurrency(track.price_cup, selectedCurrency);
+
+    const accountsForCurrency = paymentInfo.accounts.filter(a => a.currency === selectedCurrency);
 
     modalAccounts.innerHTML = '';
-    if (!paymentInfo.accounts.length) {
-      modalAccounts.innerHTML = '<div class="modal-no-accounts">Aún no se han configurado las cuentas de pago.</div>';
+    if (!accountsForCurrency.length) {
+      modalAccounts.innerHTML = `<div class="modal-no-accounts">No hay una cuenta configurada para ${escapeHtml(selectedCurrency)} todavía. Elige otra moneda arriba en "Ver precios en".</div>`;
     } else {
-      paymentInfo.accounts.forEach((acc) => {
+      accountsForCurrency.forEach((acc) => {
         const row = document.createElement('div');
         row.className = 'modal-account-row';
         row.innerHTML = `
@@ -294,10 +463,8 @@
       });
     }
 
-    // Reiniciar todo el formulario cada vez que se abre el modal, para que
-    // cada compra empiece de cero (nombre, teléfono, foto y estado del botón).
     orderForm.reset();
-    orderForm.style.display = 'block';
+    orderForm.style.display = accountsForCurrency.length ? 'block' : 'none';
     modalSuccess.style.display = 'none';
     receiptFile = null;
     receiptDrop.classList.remove('has-receipt');
@@ -322,7 +489,6 @@
   buyerNameInput.addEventListener('input', updateSubmitButtonState);
   buyerPhoneInput.addEventListener('input', updateSubmitButtonState);
 
-  receiptDrop.addEventListener('click', () => receiptInput.click());
   receiptInput.addEventListener('change', () => {
     const file = receiptInput.files[0];
     if (!file) return;
@@ -347,6 +513,7 @@
 
     const buyerName = buyerNameInput.value.trim();
     const buyerPhone = buyerPhoneInput.value.trim();
+    const displayedPrice = formatPriceInCurrency(activeModalTrack.price_cup, selectedCurrency);
 
     orderSubmitBtn.disabled = true;
     orderSubmitBtn.textContent = 'Enviando…';
@@ -356,6 +523,8 @@
       formData.append('trackId', activeModalTrack.id);
       formData.append('buyerName', buyerName);
       formData.append('buyerPhone', buyerPhone);
+      formData.append('currency', selectedCurrency);
+      formData.append('displayedPrice', displayedPrice);
       formData.append('receipt', receiptFile);
 
       const res = await fetch('/api/orders', { method: 'POST', body: formData });
@@ -364,15 +533,13 @@
         throw new Error(err.error || 'No se pudo enviar el comprobante');
       }
 
-      // Comprobante ya guardado en el servidor: ahora sí se activa el botón de WhatsApp,
-      // con un mensaje que usa el nombre que la persona acaba de escribir.
       orderForm.style.display = 'none';
       modalSuccess.style.display = 'block';
 
       if (paymentInfo.contactPhone) {
         const message = encodeURIComponent(
           `Hola, soy ${buyerName} 👋 Acabo de comprar "${activeModalTrack.title}"` +
-          `${activeModalTrack.price_label ? ` (${activeModalTrack.price_label})` : ''}. ` +
+          ` (${displayedPrice}). ` +
           `Ya te envié el comprobante de mi transferencia a través de la plataforma. ¡Gracias!`
         );
         const phoneDigits = paymentInfo.contactPhone.replace(/[^0-9]/g, '');
@@ -381,16 +548,11 @@
         modalWhatsappBtn.style.display = 'none';
       }
     } catch (err) {
-      showBuyError(err.message);
+      alert(err.message);
       orderSubmitBtn.disabled = false;
       updateSubmitButtonState();
     }
   });
-
-  function showBuyError(msg) {
-    // Reutiliza una alerta simple; si prefieres un toast dedicado, se puede añadir después.
-    alert(msg);
-  }
 
   function closeBuyModal() {
     modalOverlay.classList.remove('active');
@@ -404,8 +566,14 @@
     if (e.key === 'Escape') closeBuyModal();
   });
 
-  loadProfile();
-  loadTracks();
-  loadPaymentInfo();
-  loadSocialLinks();
+  async function init() {
+    await loadExchangeRates();
+    loadProfile();
+    loadSiteConfig();
+    loadPaymentInfo();
+    loadSocialLinks();
+    await loadTracksForSection('catalog');
+  }
+
+  init();
 })();
